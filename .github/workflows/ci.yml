@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.9", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: CLI smoke test (offline)
+        shell: bash
+        run: |
+          printf '[{"id":1,"geo":[34.7,135.5],"cn":"大阪"}]' > 331884.json
+          python anitabi_GoogleMaps.py 331884 --offline
+          test -f 331884.kml
+          head -c 120 331884.kml

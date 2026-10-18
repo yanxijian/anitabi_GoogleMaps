@@ -1,0 +1,13 @@
+# 生成的 KML 与本地缓存数据
+*.kml
+*.json
+
+# 保留仓库内的测试数据
+!tests/**/*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
