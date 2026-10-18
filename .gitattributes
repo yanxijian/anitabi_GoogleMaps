@@ -1,0 +1,12 @@
+# 默认按文本处理，换行统一；二进制文件单独声明
+* text=auto
+
+*.py      text eol=lf
+*.md      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.json    text eol=lf
+*.kml     text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+LICENSE         text eol=lf
