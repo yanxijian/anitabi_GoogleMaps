@@ -289,6 +289,27 @@ def convert_one(
     return path
 
 
+def _configure_console() -> None:
+    """让中文提示在 Windows 控制台和重定向下都不会抛 UnicodeEncodeError。
+
+    Windows 默认代码页不是 UTF-8 时，print 中文会直接抛异常；
+    这里先尝试把控制台切到 UTF-8，再给输出流兜一个 errors="replace"。
+    """
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+        except Exception:  # 没有控制台（重定向/服务）时忽略
+            pass
+
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="anitabi_GoogleMaps.py",
@@ -304,6 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    _configure_console()
     args = build_parser().parse_args(argv)
     ids = list(args.bangumi_ids)
 

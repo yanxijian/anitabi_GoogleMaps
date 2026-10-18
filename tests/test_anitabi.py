@@ -1,6 +1,6 @@
-"""anitabi_GoogleMaps çš„å•å…ƒæµ‹è¯•ã€‚
+"""anitabi_GoogleMaps 的单元测试。
 
-å…¨éƒ¨ç¦»çº¿ï¼šHTTP è°ƒç”¨è¢«æ›¿æ¢æˆå‡å®žçŽ°ï¼Œè¾“å‡ºæ–‡ä»¶å†™åˆ°ä¸´æ—¶ç›®å½•ã€‚
+全部离线：HTTP 调用被替换成假实现，输出文件写到临时目录。
 
     python -m unittest discover -s tests -v
 """
@@ -42,18 +42,18 @@ def fake_open_factory(handler):
 class BuildKmlTests(unittest.TestCase):
     def test_coordinates_are_longitude_latitude(self):
         points = [{"id": 1, "geo": [35.0, 139.0], "name": "Tokyo", "image": ""}]
-        kml, used, skipped = aim.build_kml(points, "ä½œå“")
+        kml, used, skipped = aim.build_kml(points, "作品")
         self.assertEqual((used, skipped), (1, 0))
         self.assertIn("<coordinates>139.000000,35.000000,0</coordinates>", kml)
 
     def test_namespace_and_document_name(self):
-        kml, _, _ = aim.build_kml([{"id": 2, "geo": [1.0, 2.0], "name": "X"}], "æ ‡é¢˜")
+        kml, _, _ = aim.build_kml([{"id": 2, "geo": [1.0, 2.0], "name": "X"}], "标题")
         self.assertIn('<kml xmlns="http://www.opengis.net/kml/2.2">', kml)
-        self.assertIn("<name>æ ‡é¢˜</name>", kml)
+        self.assertIn("<name>标题</name>", kml)
 
     def test_output_is_well_formed_xml(self):
         points = [
-            {"id": 1, "geo": [35.0, 139.0], "cn": "æ±äº¬ & <å¡”>", "image": "https://e.com/a.png"},
+            {"id": 1, "geo": [35.0, 139.0], "cn": "東京 & <塔>", "image": "https://e.com/a.png"},
             {"id": 2, "geo": [-33.9, 151.2], "name": "Sydney"},
         ]
         kml, used, _ = aim.build_kml(points, "A & B")
@@ -61,7 +61,7 @@ class BuildKmlTests(unittest.TestCase):
         root = ET.fromstring(kml)
         placemarks = root.findall(f"{KML_NS}Document/{KML_NS}Placemark")
         self.assertEqual(len(placemarks), 2)
-        self.assertEqual(placemarks[0].find(f"{KML_NS}name").text, "æ±äº¬ & <å¡”>")
+        self.assertEqual(placemarks[0].find(f"{KML_NS}name").text, "東京 & <塔>")
 
     def test_attribute_escaping_in_image_url(self):
         points = [{"id": 1, "geo": [1.0, 2.0], "name": "N", "image": 'https://e.com/a.png?x="1"&y=2'}]
@@ -71,12 +71,12 @@ class BuildKmlTests(unittest.TestCase):
         self.assertNotIn('src="https://e.com/a.png?x="1"', kml)
 
     def test_cdata_terminator_never_ends_the_section(self):
-        # URL å…ˆåšå±žæ€§è½¬ä¹‰ï¼Œ"]]>" å˜æˆ "]]&gt;"ï¼Œä¸ä¼šæå‰é—­åˆ CDATAã€‚
+        # URL 先做属性转义，"]]>" 变成 "]]&gt;"，不会提前闭合 CDATA。
         points = [{"id": 1, "geo": [1.0, 2.0], "name": "N", "image": "https://e.com/]]>.png"}]
         kml, _, _ = aim.build_kml(points, "t")
         self.assertIn("]]&gt;", kml)
         self.assertNotIn("]]>.png", kml)
-        ET.fromstring(kml)  # ä»ç„¶æ˜¯åˆæ³• XML
+        ET.fromstring(kml)  # 仍然是合法 XML
 
     def test_cdata_escape_splits_terminator(self):
         self.assertEqual(aim.cdata_escape("a]]>b"), "a]]]]><![CDATA[>b")
@@ -100,14 +100,48 @@ class BuildKmlTests(unittest.TestCase):
         self.assertIn(f"<name>{aim.FALLBACK_NAME}</name>", kml)
 
     def test_empty_points_still_valid(self):
-        kml, used, _ = aim.build_kml([], "ç©º")
+        kml, used, _ = aim.build_kml([], "空")
         self.assertEqual(used, 0)
         ET.fromstring(kml)
 
 
+class ConsoleTests(unittest.TestCase):
+    """Windows 控制台不是 UTF-8 时，中文提示不能把程序打崩。"""
+
+    def test_survives_streams_without_reconfigure(self):
+        class NoReconfigure:
+            def write(self, text):
+                return len(text)
+
+        original_out, original_err = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = NoReconfigure()
+        try:
+            aim._configure_console()  # 不应抛异常
+        finally:
+            sys.stdout, sys.stderr = original_out, original_err
+
+    def test_requests_replacement_errors(self):
+        calls = []
+
+        class Recorder:
+            def reconfigure(self, **kwargs):
+                calls.append(kwargs)
+
+        original_out, original_err = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = Recorder()
+        try:
+            aim._configure_console()
+        finally:
+            sys.stdout, sys.stderr = original_out, original_err
+
+        self.assertEqual(len(calls), 2)
+        for kwargs in calls:
+            self.assertEqual(kwargs.get("errors"), "replace")
+
+
 class FilenameTests(unittest.TestCase):
     def test_windows_invalid_characters_removed(self):
-        name = aim.safe_filename('Re:Zero / ç¬¬2å­£? <ç‰¹åˆ«ç¯‡>')
+        name = aim.safe_filename('Re:Zero / 第2季? <特别篇>')
         for bad in '<>:"/\\|?*':
             self.assertNotIn(bad, name)
         self.assertTrue(name)
@@ -176,7 +210,7 @@ class EndToEndOfflineTests(unittest.TestCase):
             json.dump(points, handle, ensure_ascii=False)
 
     def test_offline_conversion_creates_kml(self):
-        self._write_points("123", [{"id": 7, "geo": [34.7, 135.5], "cn": "å¤§é˜ª"}])
+        self._write_points("123", [{"id": 7, "geo": [34.7, 135.5], "cn": "大阪"}])
         code = aim.main(["123", "--offline"])
         self.assertEqual(code, 0)
         self.assertTrue(os.path.isfile("123.kml"), os.listdir("."))
@@ -184,6 +218,7 @@ class EndToEndOfflineTests(unittest.TestCase):
             content = handle.read()
         ET.fromstring(content)
         self.assertIn("<coordinates>135.500000,34.700000,0</coordinates>", content)
+        self.assertIn("<name>大阪</name>", content)
 
     def test_offline_falls_back_to_local_cache_when_network_fails(self):
         self._write_points("456", [{"id": 8, "geo": [1.0, 2.0], "name": "N"}])
@@ -210,6 +245,34 @@ class EndToEndOfflineTests(unittest.TestCase):
     def test_points_without_coordinates_fail(self):
         self._write_points("empty", [{"id": 1, "name": "no geo"}])
         self.assertEqual(aim.main(["empty", "--offline"]), 1)
+
+
+class SourceEncodingTests(unittest.TestCase):
+    """守护文件编码：被外部工具二次编码成乱码时立刻失败。
+
+    正常的中文源文件无法用 latin-1 表示；一旦被 UTF-8 -> Latin-1 -> UTF-8
+    转坏，全文就只剩 Latin-1 能表示的字符，这里的断言就会失败。
+    """
+
+    def assert_clean_utf8(self, path: str) -> None:
+        with open(path, "rb") as handle:
+            text = handle.read().decode("utf-8")
+        self.assertTrue(any(ord(ch) > 127 for ch in text), f"{path} 里没有中文，可能已损坏")
+        try:
+            text.encode("latin-1")
+        except UnicodeEncodeError:
+            return
+        self.fail(f"{path} 疑似被二次编码（全文可用 latin-1 表示）")
+
+    def test_module_literals_are_readable_chinese(self):
+        self.assertEqual(aim.FALLBACK_NAME, "未命名地点")
+        self.assertEqual(aim.safe_filename("海阔天空"), "海阔天空")
+
+    def test_module_source_is_clean_utf8(self):
+        self.assert_clean_utf8(aim.__file__)
+
+    def test_test_file_itself_is_clean_utf8(self):
+        self.assert_clean_utf8(__file__)
 
 
 if __name__ == "__main__":
