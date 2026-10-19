@@ -2,6 +2,8 @@
 
 **简体中文** · [English](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
+<!-- translated-from: README.md sha256:328afc1d9022 -->
+
 把 [anitabi](https://www.anitabi.cn/map) 的圣地巡礼地图导出成 **KML**，再导入 [Google My Maps](https://www.google.com/maps/d/) 在谷歌地图上浏览。
 
 只依赖 Python 3.8+ 标准库，**不需要安装 `requests`**。

@@ -2,6 +2,8 @@
 
 **한국어** · [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
+<!-- translated-from: README.md sha256:328afc1d9022 -->
+
 [anitabi](https://www.anitabi.cn/map)의 성지순례 지도를 **KML**로 내보내고, [Google My Maps](https://www.google.com/maps/d/)에 가져와 구글 지도에서 보기 위한 도구입니다.
 
 Python 3.8 이상 표준 라이브러리만 씁니다. **`requests`를 설치할 필요가 없습니다**.
