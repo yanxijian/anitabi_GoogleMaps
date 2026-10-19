@@ -1,5 +1,6 @@
-# 默认按文本处理，换行统一；二进制文件单独声明
-* text=auto
+# 默认按文本处理并统一检出为 LF（否则 Windows 上 core.eol=native 时工作区会变 CRLF，
+# 撞上 repo-rules.json 里的 eol=lf 规则）；二进制文件单独声明
+* text=auto eol=lf
 
 *.py      text eol=lf
 *.md      text eol=lf
