@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-__version__ = "0.4.0"
+__version__ = "0.6.0"
 CONFIG_NAME = "repo-rules.json"
 TOOL_ROOT = Path(__file__).resolve().parent
 BOM = b"\xef\xbb\xbf"
@@ -54,6 +54,31 @@ for candidate in python3 python py; do
 done
 
 echo "pre-commit: no Python interpreter found; skipping repository rules" >&2
+exit 0
+"""
+
+COMMIT_MSG_HOOK = """#!/bin/sh
+# commit-msg hook installed by `repo-rules init`.
+#
+# Rejects a commit message that is not English when `commit_message.english` is
+# on. Install once per clone:
+#   git config core.hooksPath .githooks
+#
+# The same check runs in CI; this hook is a convenience.
+# $1 is the path of the message file git just wrote.
+
+set -e
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+[ -f repo-rules.json ] || exit 0
+
+for candidate in python3 python py; do
+\tif command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys' >/dev/null 2>&1; then
+\t\texec "$candidate" scripts/repo_rules.py check-msg "$1" --config repo-rules.json
+\tfi
+done
+
+echo "commit-msg: no Python interpreter found; skipping the message check" >&2
 exit 0
 """
 
@@ -295,6 +320,58 @@ class RuleConfig:
                 "stale": language_stale,
             }
 
+        # comments: code comments must be in English (non-Latin script is flagged).
+        comments = data.get("comments", {})
+        self.comment_globs: List[str] = []
+        self.comment_allow_files: List[str] = []
+        self.comment_allow_marker = "cjk-ok"
+        if comments:
+            if not isinstance(comments, dict):
+                raise ConfigError("comments must be an object")
+            if _as_bool(comments.get("english", True), "comments.english"):
+                self.comment_globs = _as_globs(
+                    comments.get(
+                        "globs",
+                        [
+                            "*.c",
+                            "*.cc",
+                            "*.cpp",
+                            "*.cxx",
+                            "*.h",
+                            "*.hh",
+                            "*.hpp",
+                            "*.hxx",
+                            "*.py",
+                            "*.sh",
+                            "*.ps1",
+                            "*.js",
+                            "*.bat",
+                            "*.cmd",
+                        ],
+                    ),
+                    "comments.globs",
+                )
+                self.comment_allow_files = _as_globs(
+                    comments.get("allow_files", []), "comments.allow_files"
+                )
+                self.comment_allow_marker = _as_str(
+                    comments.get("allow_marker", "cjk-ok"), "comments.allow_marker"
+                )
+
+        # commit_message: commit messages are English (checked by the commit-msg hook).
+        commit_message = data.get("commit_message", {})
+        self.commit_message_english = False
+        self.commit_message_marker = "cjk-ok"
+        if commit_message:
+            if not isinstance(commit_message, dict):
+                raise ConfigError("commit_message must be an object")
+            self.commit_message_english = _as_bool(
+                commit_message.get("english", True), "commit_message.english"
+            )
+            self.commit_message_marker = _as_str(
+                commit_message.get("allow_marker", "cjk-ok"), "commit_message.allow_marker"
+            )
+
         gitattributes = data.get("gitattributes", {})
         if not isinstance(gitattributes, dict):
             raise ConfigError("gitattributes must be an object")
@@ -358,6 +435,66 @@ def rel_path(root: Path, path: Path) -> str:
         return path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+NON_LATIN = re.compile(
+    "["
+    "\u3040-\u30ff"  # Hiragana, Katakana
+    "\u3400-\u4dbf"  # CJK extension A
+    "\u4e00-\u9fff"  # CJK unified ideographs
+    "\uac00-\ud7af"  # Hangul syllables
+    "\uff00-\uffef"  # fullwidth forms
+    "\u3000-\u303f"  # CJK punctuation
+    "]"
+)
+
+C_STYLE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".js", ".mjs"}
+HASH_SUFFIXES = {".py", ".sh", ".bash", ".ps1", ".psm1", ".yml", ".yaml", ".rb", ".pl"}
+BATCH_SUFFIXES = {".bat", ".cmd"}
+
+
+def comment_segments(text: str, suffix: str) -> List[Tuple[int, str]]:
+    """Return (line number, comment text) for whole-line and trailing comments.
+
+    Deliberately conservative: only shapes that are unambiguously comments, so the
+    check never fires on a string literal. C-style blocks are tracked across lines.
+    """
+    segments: List[Tuple[int, str]] = []
+    in_block = False
+    for number, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if suffix in C_STYLE_SUFFIXES:
+            if in_block:
+                segments.append((number, stripped))
+                if "*/" in stripped:
+                    in_block = False
+                continue
+            if stripped.startswith("/*"):
+                segments.append((number, stripped))
+                if "*/" not in stripped:
+                    in_block = True
+                continue
+            if stripped.startswith("//"):
+                segments.append((number, stripped))
+                continue
+            index = line.find("//")
+            if index > 0 and line[:index].count('"') % 2 == 0:
+                segments.append((number, line[index:]))
+            continue
+        if suffix in BATCH_SUFFIXES:
+            if stripped.upper().startswith("REM ") or stripped.startswith("::"):
+                segments.append((number, stripped))
+            continue
+        if suffix in HASH_SUFFIXES:
+            if stripped.startswith("#"):
+                segments.append((number, stripped))
+                continue
+            index = line.find("#")
+            if index > 0 and line[:index].count('"') % 2 == 0 and line[:index].count("'") % 2 == 0:
+                segments.append((number, line[index:]))
+    return segments
 
 
 def first_significant_line(lines: Sequence[str]) -> str:
@@ -529,6 +666,7 @@ class Checker:
             self._check_width(path, rel)
             self._check_forbidden(path, rel)
             self._check_header(path, rel)
+            self._check_comments(path, rel)
 
         self._check_versions()
         self._check_changelog()
@@ -544,6 +682,29 @@ class Checker:
                 self._check_lang_links()
         self._check_gitattributes()
         return self.report
+
+    def _check_comments(self, path: Path, rel: str) -> None:
+        if not self.config.comment_globs:
+            return
+        if not any(match_glob(rel, glob) for glob in self.config.comment_globs):
+            return
+        if any(match_glob(rel, glob) for glob in self.config.comment_allow_files):
+            return
+        try:
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            return
+        marker = self.config.comment_allow_marker
+        for number, comment in comment_segments(text, path.suffix.lower()):
+            if marker and marker in comment:
+                continue
+            if NON_LATIN.search(comment):
+                self.report.bad(
+                    "%s:%d" % (rel, number),
+                    "comments",
+                    "comment is not English: write code comments in English "
+                    "(append `%s` on the line for a quotation or a data sample)" % marker,
+                )
 
     def _check_encoding(self, path: Path, rel: str, fix: bool) -> None:
         rule = self.config.encoding_for(rel)
@@ -965,6 +1126,18 @@ def command_init(args: argparse.Namespace) -> int:
             pass
         print("wrote %s" % hook_target)
 
+    msg_hook = root / ".githooks" / "commit-msg"
+    if msg_hook.exists() and not args.force:
+        print("kept %s (already exists)" % msg_hook)
+    else:
+        msg_hook.parent.mkdir(parents=True, exist_ok=True)
+        msg_hook.write_bytes(COMMIT_MSG_HOOK.encode("utf-8"))
+        try:
+            msg_hook.chmod(0o755)
+        except OSError:
+            pass
+        print("wrote %s" % msg_hook)
+
     workflow_source = RESOURCE_ROOT / "templates" / "github" / "workflows" / "hygiene.yml"
     workflow_target = root / ".github" / "workflows" / "hygiene.yml"
     if workflow_target.exists() and not args.force:
@@ -979,6 +1152,45 @@ def command_init(args: argparse.Namespace) -> int:
     print("  2. python scripts/repo_rules.py check")
     print("  3. git config core.hooksPath .githooks")
     return 0
+
+
+def command_check_msg(args: argparse.Namespace) -> int:
+    """Reject a commit message that is not English (run from the commit-msg hook)."""
+    path = Path(args.message_file)
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print("repo-rules: cannot read the message file: %s" % exc, file=sys.stderr)
+        return 2
+
+    root = Path(getattr(args, "root", ".")).resolve()
+    config_path = root / getattr(args, "config", CONFIG_NAME)
+    try:
+        config = RuleConfig.load(root, config_path.name)
+    except ConfigError as exc:
+        print("repo-rules: %s" % exc, file=sys.stderr)
+        return 2
+
+    if not config.commit_message_english:
+        return 0
+
+    marker = config.commit_message_marker
+    subject = next((line for line in text.splitlines() if line.strip()), "")
+    if marker and marker in text:
+        return 0
+    if not NON_LATIN.search(text):
+        return 0
+
+    print("repo-rules: the commit message must be English", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("  subject: %s" % subject, file=sys.stderr)
+    print("", file=sys.stderr)
+    print(
+        "Rewrite it in English. To quote a title or a data sample, put `%s` in the message."
+        % marker,
+        file=sys.stderr,
+    )
+    return 1
 
 
 def command_list_presets(args: argparse.Namespace) -> int:
@@ -1006,6 +1218,7 @@ def command_sync(args: argparse.Namespace) -> int:
     jobs = [(root / dest_rel, source.read_bytes(), False)]
     if want_hook:
         jobs.append((root / ".githooks" / "pre-commit", PRECOMMIT_HOOK.encode("utf-8"), True))
+        jobs.append((root / ".githooks" / "commit-msg", COMMIT_MSG_HOOK.encode("utf-8"), True))
 
     stale = []
     for dst, payload, executable in jobs:
@@ -1059,6 +1272,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_presets = subparsers.add_parser("list-presets", help="list built-in presets")
     list_presets.set_defaults(func=command_list_presets)
+
+    check_msg = subparsers.add_parser("check-msg", help="verify a commit message is English")
+    check_msg.add_argument("message_file", help="path of the message file (git passes it to commit-msg)")
+    check_msg.add_argument("--config", default=CONFIG_NAME, help="configuration path relative to --root")
+    check_msg.add_argument("--root", default=".", help="repository root (default: current directory)")
+    check_msg.set_defaults(func=command_check_msg)
 
     sync = subparsers.add_parser("sync", help="sync the vendored checker and hook into a project")
     sync.add_argument("--root", default=".", help="target repository root")

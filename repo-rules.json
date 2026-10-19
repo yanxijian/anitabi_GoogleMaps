@@ -105,5 +105,8 @@
     "required_patterns": [
       "\\* text=auto eol=lf"
     ]
+  },
+  "commit_message": {
+    "english": true
   }
 }
