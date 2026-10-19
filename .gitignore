@@ -2,8 +2,10 @@
 *.kml
 *.json
 
-# 保留仓库内的测试数据
+# 保留仓库内的测试数据与工具配置
+# repo-rules.json 是纳管配置（RepoRules 的检查策略），必须进版本库
 !tests/**/*.json
+!repo-rules.json
 
 # Python
 __pycache__/
